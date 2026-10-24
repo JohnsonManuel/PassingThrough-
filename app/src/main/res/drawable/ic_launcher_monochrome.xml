@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-colour layer for themed icons (Android 13+). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M32,26 H76 A6,6 0 0 1 82,32 V62 A6,6 0 0 1 76,68 H32 A6,6 0 0 1 26,62 V32 A6,6 0 0 1 32,26 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3.5" />
+    <group>
+        <clip-path android:pathData="M35,30 H73 A3,3 0 0 1 76,33 V61 A3,3 0 0 1 73,64 H35 A3,3 0 0 1 32,61 V33 A3,3 0 0 1 35,30 Z" />
+        <path android:fillColor="#FFFFFFFF" android:fillAlpha="0.55" android:pathData="M32,58 Q44,51 54,57 T76,54 L76,64 L32,64 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M32,61 Q46,56 60,61 T76,60 L76,64 L32,64 Z" />
+    </group>
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M54,52 C51.5,48.5 48,45 48,39.5 A6,6 0 0 1 60,39.5 C60,45 56.5,48.5 54,52 Z M54,37.2 A2.3,2.3 0 1 1 54,41.8 A2.3,2.3 0 1 1 54,37.2 Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M24,72 H84 V74.5 H24 Z M27,74.5 h3 v4.5 h-3 Z M35,74.5 h3 v4.5 h-3 Z M43,74.5 h3 v4.5 h-3 Z M51,74.5 h3 v4.5 h-3 Z M59,74.5 h3 v4.5 h-3 Z M67,74.5 h3 v4.5 h-3 Z M75,74.5 h3 v4.5 h-3 Z" />
+</vector>
