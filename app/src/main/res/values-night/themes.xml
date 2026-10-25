@@ -2,6 +2,6 @@
 <resources>
     <style name="Theme.PassingThrough" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
-        <item name="android:colorAccent">#8FD3B8</item>
+        <item name="android:colorAccent">#96D3BC</item>
     </style>
 </resources>
