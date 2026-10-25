@@ -20,6 +20,8 @@ object PlaceRepository {
     private const val NOMINATIM_MIN_INTERVAL_MS = 1_100L
     private const val NEARBY_RADIUS_M = 10_000
     private const val MAX_NEARBY = 30
+    private const val MAX_ATTRACTIONS = 10
+    private const val MAX_SUMMARIES = 20
     private const val MAX_HISTORY_CHARS = 3_000
 
     private val nominatimMutex = Mutex()
@@ -51,13 +53,13 @@ object PlaceRepository {
 
     // ---------------------------------------------------------------- Nominatim
 
-    suspend fun reverseGeocode(location: LatLon): PlaceName {
+    suspend fun reverseGeocode(location: LatLon, level: Level = Level.CITY): PlaceName {
         val lat = String.format(Locale.US, "%.3f", location.lat)
         val lon = String.format(Locale.US, "%.3f", location.lon)
-        val key = "$lat,$lon"
+        val key = "$level:$lat,$lon"
         placeCache[key]?.let { return it }
 
-        val url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10" +
+        val url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=${level.nominatimZoom}" +
             "&addressdetails=1&extratags=1&accept-language=en&lat=$lat&lon=$lon"
         val body = nominatimMutex.withLock {
             placeCache[key]?.let { return it }
@@ -69,21 +71,30 @@ object PlaceRepository {
                 lastNominatimNanos = System.nanoTime()
             }
         }
-        val place = parseNominatim(body)
+        val place = parseNominatim(body, level)
         placeCache[key] = place
         return place
     }
 
-    fun parseNominatim(body: String): PlaceName {
+    fun parseNominatim(body: String, level: Level = Level.CITY): PlaceName {
         val root = JSONObject(body)
         val address = root.optJSONObject("address")
         if (root.has("error") || address == null) {
-            return PlaceName(FALLBACK_TOWN_NAME, "", null, null, null, found = false)
+            return PlaceName(FALLBACK_TOWN_NAME, "", null, null, null, found = false, level = level)
         }
-        val town = listOf("city", "town", "village", "municipality", "hamlet", "suburb")
-            .firstNotNullOfOrNull { address.str(it) }
+        val nameKeys = when (level) {
+            Level.CITY -> listOf("city", "town", "village", "municipality", "hamlet", "suburb")
+            Level.STATE -> listOf("state", "province", "region", "state_district", "county")
+            Level.COUNTRY -> listOf("country")
+        }
+        val subtitleKeys = when (level) {
+            Level.CITY -> listOf("county", "state", "country")
+            Level.STATE -> listOf("country")
+            Level.COUNTRY -> emptyList()
+        }
+        val town = nameKeys.firstNotNullOfOrNull { address.str(it) }
         val name = town ?: FALLBACK_TOWN_NAME
-        val subtitle = listOf("county", "state", "country")
+        val subtitle = subtitleKeys
             .mapNotNull { address.str(it) }
             .filter { !it.equals(name, ignoreCase = true) }
             .distinct()
@@ -104,6 +115,9 @@ object PlaceRepository {
             wikidataId = wikidata,
             wikipediaTag = wikipedia,
             found = town != null,
+            level = level,
+            stateName = listOf("state", "province", "region").firstNotNullOfOrNull { address.str(it) },
+            countryName = address.str("country"),
         )
     }
 
@@ -124,7 +138,17 @@ object PlaceRepository {
                     null
                 }
                 val history = fullText?.let { extractHistory(it) }
+                val qid = summary.wikidataId ?: place.wikidataId
+                val image = summary.imageUrl ?: qid?.let {
+                    try {
+                        commonsImage(it)
+                    } catch (e: java.io.IOException) {
+                        null
+                    }
+                }
                 val info = summary.copy(
+                    imageUrl = image,
+                    wikidataId = qid,
                     knownFor = fullText?.let { extractKnownFor(it) } ?: emptyList(),
                     history = history?.second,
                     historyHeading = history?.first,
@@ -162,6 +186,23 @@ object PlaceRepository {
         return candidates.distinct()
     }
 
+    /** The Wikidata "image" (P18) of an item, as an 800 px Wikimedia Commons URL. */
+    private fun commonsImage(qid: String): String? {
+        val url = "https://www.wikidata.org/w/api.php?action=wbgetclaims&format=json&property=P18&entity=$qid"
+        return parseCommonsImage(Http.get(url))
+    }
+
+    fun parseCommonsImage(body: String): String? {
+        val file = JSONObject(body).optJSONObject("claims")?.optJSONArray("P18")
+            ?.optJSONObject(0)?.optJSONObject("mainsnak")?.optJSONObject("datavalue")
+            ?.str("value") ?: return null
+        val encoded = URLEncoder.encode(file.replace(' ', '_'), "UTF-8").replace("+", "%20")
+        return "https://commons.wikimedia.org/wiki/Special:FilePath/$encoded?width=800"
+    }
+
+    /** Wikipedia thumbnail URLs can be resized by rewriting their "/NNNpx-" part. */
+    fun resizeThumbnail(url: String, px: Int): String = url.replace(thumbSize, "/${px}px-")
+
     private fun fetchSummary(lang: String, title: String): TownInfo? {
         val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20")
         val body = try {
@@ -182,7 +223,7 @@ object PlaceRepository {
         val thumb = root.optJSONObject("thumbnail")?.str("source")
         val image = when {
             original != null && original.optInt("width", Int.MAX_VALUE) <= 1600 -> original.str("source")
-            thumb != null -> thumb.replace(thumbSize, "/800px-")
+            thumb != null -> resizeThumbnail(thumb, 800)
             else -> null
         }
         return TownInfo(
@@ -287,7 +328,7 @@ object PlaceRepository {
         val url = "https://$lang.wikipedia.org/w/api.php?action=query&format=json&formatversion=2" +
             "&redirects=1&generator=geosearch&ggscoord=$coord&ggsradius=$NEARBY_RADIUS_M&ggslimit=50" +
             "&prop=coordinates%7Cpageimages%7Cdescription%7Cinfo%7Cpageprops&colimit=max" +
-            "&piprop=thumbnail&pithumbsize=160&pilimit=max&ppprop=wikibase_item&inprop=url"
+            "&piprop=thumbnail&pithumbsize=480&pilimit=max&ppprop=wikibase_item"
         return parseGeosearch(lang, location, Http.get(url))
     }
 
@@ -306,8 +347,6 @@ object PlaceRepository {
                 location = loc,
                 distanceKm = haversineKm(origin, loc),
                 thumbnailUrl = page.optJSONObject("thumbnail")?.str("source"),
-                url = page.str("canonicalurl")
-                    ?: "https://$lang.wikipedia.org/wiki/" + URLEncoder.encode(title.replace(' ', '_'), "UTF-8"),
                 lang = lang,
                 wikidataId = page.optJSONObject("pageprops")?.str("wikibase_item"),
                 articleLength = page.optLong("length", 0L),
@@ -339,6 +378,60 @@ object PlaceRepository {
         if (p.title.endsWith("straße", ignoreCase = true) || p.title.endsWith(" Street")) return true
         return boringWords.containsMatchIn(p.title) ||
             (p.description != null && boringWords.containsMatchIn(p.description))
+    }
+
+    /** Places with a photo come first: they are the "main attractions" shown on the map. */
+    fun attractions(places: List<NearbyPlace>): List<NearbyPlace> =
+        places.filter { it.thumbnailUrl != null }.take(MAX_ATTRACTIONS)
+
+    /** Adds the first sentences of each article to the attractions and the next few places. */
+    suspend fun withSummaries(places: List<NearbyPlace>): List<NearbyPlace> = coroutineScope {
+        val top = attractions(places)
+        val wanted = (top + places.filterNot { it in top }).take(MAX_SUMMARIES).filter { it.summary == null }
+        val fetched = wanted.groupBy { it.lang }.map { (lang, group) ->
+            async(Dispatchers.IO) {
+                lang to try {
+                    fetchIntros(lang, group.map { it.title })
+                } catch (e: java.io.IOException) {
+                    emptyMap()
+                } catch (e: org.json.JSONException) {
+                    emptyMap()
+                }
+            }
+        }.map { it.await() }.toMap()
+        places.map { p -> fetched[p.lang]?.get(p.title)?.let { p.copy(summary = it) } ?: p }
+    }
+
+    private fun fetchIntros(lang: String, titles: List<String>): Map<String, String> {
+        if (titles.isEmpty()) return emptyMap()
+        val joined = titles.joinToString("%7C") { URLEncoder.encode(it, "UTF-8") }
+        val url = "https://$lang.wikipedia.org/w/api.php?action=query&format=json&formatversion=2" +
+            "&prop=extracts&exintro=1&explaintext=1&exsentences=4&exlimit=max&redirects=1&titles=$joined"
+        return parseIntros(Http.get(url))
+    }
+
+    /** Title -> intro text; requested titles that were normalized or redirected map to the same text. */
+    fun parseIntros(body: String): Map<String, String> {
+        val query = JSONObject(body).optJSONObject("query") ?: return emptyMap()
+        val result = HashMap<String, String>()
+        val pages = query.optJSONArray("pages")
+        for (i in 0 until (pages?.length() ?: 0)) {
+            val page = pages!!.optJSONObject(i) ?: continue
+            val title = page.str("title") ?: continue
+            val extract = page.str("extract")?.trim()?.replace(Regex("\\s+"), " ") ?: continue
+            result[title] = extract
+        }
+        // Redirects first, so a title that was normalized and then redirected resolves fully.
+        for (key in listOf("redirects", "normalized")) {
+            val arr = query.optJSONArray(key) ?: continue
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val from = o.str("from") ?: continue
+                val to = o.str("to") ?: continue
+                result[to]?.let { result[from] = it }
+            }
+        }
+        return result
     }
 
     fun withoutTown(list: List<NearbyPlace>, townQid: String?, townTitles: Collection<String>): List<NearbyPlace> =

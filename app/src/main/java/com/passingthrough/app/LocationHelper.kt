@@ -13,6 +13,9 @@ import android.os.CancellationSignal
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,6 +38,9 @@ object LocationHelper {
     private const val TIMEOUT_MS = 20_000L
     /** Used only after a timeout, so the user still gets something rather than an error. */
     private const val MAX_FALLBACK_AGE_MS = 10 * 60_000L
+    private const val LIVE_INTERVAL_MS = 5_000L
+    private const val LIVE_DISTANCE_M = 25f
+    private const val GPS_PREFERENCE_MS = 20_000L
 
     fun hasPermission(context: Context): Boolean =
         PERMISSIONS.any {
@@ -59,6 +65,36 @@ object LocationHelper {
         }
         return fix?.toLatLon()
             ?: last?.takeIf { ageMillis(it) < MAX_FALLBACK_AGE_MS }?.toLatLon()
+    }
+
+    /**
+     * Live fixes for the moving dot on the map while the app is open. GPS wins; network fixes are
+     * only used when GPS has been silent for a while, so the dot doesn't jump between the two.
+     */
+    @SuppressLint("MissingPermission")
+    fun updates(context: Context): Flow<LatLon> = callbackFlow {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        var lastGpsAt = 0L
+        val listener = SimpleLocationListener(onLocation = { loc ->
+            val now = SystemClock.elapsedRealtime()
+            if (loc.provider == LocationManager.GPS_PROVIDER) {
+                lastGpsAt = now
+                trySend(loc.toLatLon())
+            } else if (now - lastGpsAt > GPS_PREFERENCE_MS) {
+                trySend(loc.toLatLon())
+            }
+        })
+        val available = lm.allProviders
+        for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+            if (provider !in available) continue
+            try {
+                lm.requestLocationUpdates(provider, LIVE_INTERVAL_MS, LIVE_DISTANCE_M, listener, Looper.getMainLooper())
+            } catch (e: Exception) {
+                // No permission for this provider; the other one may still work.
+            }
+        }
+        freshestLastKnown(lm)?.takeIf { ageMillis(it) < MAX_REUSE_AGE_MS }?.let { trySend(it.toLatLon()) }
+        awaitClose { runCatching { lm.removeUpdates(listener) } }
     }
 
     fun enabledProviders(lm: LocationManager): List<String> {

@@ -10,6 +10,13 @@ import kotlin.math.sqrt
 
 data class LatLon(val lat: Double, val lon: Double)
 
+/** The map's zoom steps. [CITY] ("Train view") is the deepest the map ever goes. */
+enum class Level(val label: String, val zoom: Double, val nominatimZoom: Int) {
+    COUNTRY("Country", 5.5, 3),
+    STATE("State", 7.5, 5),
+    CITY("Train view", 12.0, 10),
+}
+
 /** Result of the Nominatim reverse lookup. */
 data class PlaceName(
     val name: String,
@@ -19,6 +26,9 @@ data class PlaceName(
     val wikipediaTag: String?,
     /** False when Nominatim could not name the place (we show the fallback text). */
     val found: Boolean,
+    val level: Level = Level.CITY,
+    val stateName: String? = null,
+    val countryName: String? = null,
 )
 
 data class TownInfo(
@@ -40,10 +50,11 @@ data class NearbyPlace(
     val location: LatLon,
     val distanceKm: Double,
     val thumbnailUrl: String?,
-    val url: String,
     val lang: String,
     val wikidataId: String?,
     val articleLength: Long,
+    /** First sentences of the article, fetched after the list itself. */
+    val summary: String? = null,
 )
 
 private const val EARTH_RADIUS_KM = 6371.0088
